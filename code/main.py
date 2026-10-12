@@ -86,3 +86,25 @@ def preprocess_social_dataset(file_path: str) -> pd.DataFrame:
 # 4. Run Pre-processing Phase
 DATA_FILE = os.path.join(os.path.dirname(__file__), "..", "Synthetic Data - Social Media Tweets.xlsx")
 GLOBAL_DATASET_DF = preprocess_social_dataset(DATA_FILE)
+
+from langchain_core.tools import tool
+
+# 5. Define Deterministic Tools (From Architecture Doc)
+@tool
+def calculate_overall_sentiment_distribution() -> dict:
+    """
+    Calculates the macro-level percentage distribution of sentiments across the entire dataset.
+    The agent MUST use this tool to answer questions about overall percentages or statistics.
+    """
+    total_records = len(GLOBAL_DATASET_DF)
+    if total_records == 0:
+        return {"error": "Dataset is currently empty."}
+        
+    distribution = GLOBAL_DATASET_DF['sentiment'].value_counts(normalize=True) * 100
+    
+    return {
+        "total_tweets_analyzed": total_records,
+        "positive_percentage": round(distribution.get('POSITIVE', 0), 2),
+        "negative_percentage": round(distribution.get('NEGATIVE', 0), 2),
+        "neutral_percentage": round(distribution.get('NEUTRAL', 0), 2)
+    }
