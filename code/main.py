@@ -108,3 +108,19 @@ def calculate_overall_sentiment_distribution() -> dict:
         "negative_percentage": round(distribution.get('NEGATIVE', 0), 2),
         "neutral_percentage": round(distribution.get('NEUTRAL', 0), 2)
     }
+
+@tool
+def query_specific_tweet(tweet_id: str) -> dict:
+    """
+    Retrieves the specific classification and the pre-computed logical reasoning for a single tweet ID.
+    """
+    tweet_row = GLOBAL_DATASET_DF[GLOBAL_DATASET_DF['Tweet_ID'] == tweet_id]
+    
+    if tweet_row.empty:
+        return {"error": f"Tweet ID {tweet_id} could not be located in the dataset."}
+        
+    return {
+        "tweet_text": tweet_row.iloc[0]['Tweet_Text'],
+        "classification": tweet_row.iloc[0]['sentiment'],
+        "agent_reasoning": tweet_row.iloc[0]['agent_reasoning']
+    }
