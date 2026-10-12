@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Enterprise Sentiment Analysis Agent</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+
+<body>
+    <div class="bg-gradient"></div>
+    <div class="app-container">
+        <header class="header glass-panel">
+            <div class="logo">
+                <span class="logo-icon">✨</span>
+                <h1>Evonence AI</h1>
+            </div>
+            <div class="status-badge">
+                <span class="pulse"></span> Amazon Nova Pro Active
+            </div>
+        </header>
+
+        <main class="chat-container glass-panel">
+            <div class="chat-history" id="chat-history">
+                <div class="message bot">
+                    <div class="message-avatar">🤖</div>
+                    <div class="message-bubble">
+                        Hello! I'm the Enterprise Sentiment Analysis Agent. I have pre-processed the social media
+                        dataset using Amazon Nova.
+                        <br><br>
+                        Try asking:
+                        <ul>
+                            <li>"What is the overall sentiment of these tweets?"</li>
+                            <li>"What is the sentiment of TWT-001?"</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+
+            <div class="input-area">
+                <form id="chat-form">
+                    <input type="text" id="user-input" placeholder="Ask about the dataset..." autocomplete="off">
+                    <button type="submit" id="send-btn">
+                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                            <path d="M22 2L11 13M22 2L15 22L11 13M22 2L2 9L11 13" stroke="currentColor" stroke-width="2"
+                                stroke-linecap="round" stroke-linejoin="round" />
+                        </svg>
+                    </button>
+                </form>
+            </div>
+        </main>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <script src="{{ url_for('static', filename='script.js') }}"></script>
+</body>
+
+</html>
