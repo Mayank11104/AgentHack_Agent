@@ -1,5 +1,7 @@
 import os
-from flask import Flask, render_template
+import time
+from functools import wraps
+from flask import Flask, render_template, request, jsonify
 
 # Get the absolute path of the directory containing app.py
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -9,6 +11,32 @@ app = Flask(
     template_folder=os.path.join(BASE_DIR, 'templates'),
     static_folder=os.path.join(BASE_DIR, 'static')
 )
+
+# --- SECURITY LAYER: IN-MEMORY RATE LIMITER ---
+RATE_LIMIT = 5 # Maximum 5 requests
+RATE_WINDOW = 60 # per 60 seconds
+ip_records = {}
+
+def rate_limit(f):
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        client_ip = request.remote_addr
+        current_time = time.time()
+        
+        # Cleanup records older than the window
+        if client_ip in ip_records:
+            ip_records[client_ip] = [t for t in ip_records[client_ip] if current_time - t < RATE_WINDOW]
+        else:
+            ip_records[client_ip] = []
+            
+        # Check limit
+        if len(ip_records[client_ip]) >= RATE_LIMIT:
+            print(f"SECURITY ALERT: Rate limit exceeded by IP {client_ip}")
+            return jsonify({"error": "Security Layer: Rate limit exceeded (Max 5 requests/min). Please slow down."}), 429
+            
+        ip_records[client_ip].append(current_time)
+        return f(*args, **kwargs)
+    return decorated_function
 
 @app.route('/')
 def index():
