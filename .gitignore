@@ -1,0 +1,57 @@
+# ==========================================
+# Evonence AI Enterprise Sentiment Agent
+# Git Ignore Configuration
+# ==========================================
+
+# Environment variables & secrets
+.env
+code/.env
+*.env
+*.env.local
+*.env.*.local
+!*.env.example
+
+# AWS credentials & Keys folder
+keys/
+*.pem
+*.key
+credentials
+secrets/
+
+# Scratch & Inspection Scripts (Excluded from repo)
+read_docs.py
+read_stdlib.py
+run_bedrock.py
+test_bedrock.py
+
+# Python Virtual Environments
+venv/
+.venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Distribution / packaging
+build/
+dist/
+*.egg-info/
+*.egg
+
+# IDEs & OS Files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+
+# Hackathon / archive files
+submission.zip
+*.zip
