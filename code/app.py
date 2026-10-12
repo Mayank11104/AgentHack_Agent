@@ -2,6 +2,7 @@ import os
 import time
 from functools import wraps
 from flask import Flask, render_template, request, jsonify
+from main import agent_executor, system_prompt
 
 # Get the absolute path of the directory containing app.py
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -51,6 +52,26 @@ def add_security_headers(response):
 @app.route('/')
 def index():
     return render_template('index.html')
+
+@app.route('/api/chat', methods=['POST'])
+@rate_limit # Applied Security Rate Limiting
+def chat():
+    user_input = request.json.get('message', '')
+    
+    # --- SECURITY LAYER: INPUT VALIDATION ---
+    if not user_input:
+        return jsonify({"error": "Message is required"}), 400
+    
+    if len(user_input) > 500:
+        print(f"SECURITY ALERT: Payload too large from IP {request.remote_addr}")
+        return jsonify({"error": "Security Layer: Payload too large. Maximum 500 characters allowed."}), 413
+        
+    try:
+        response = agent_executor.invoke({"messages": [("system", system_prompt), ("user", user_input)]})
+        bot_reply = response['messages'][-1].content
+        return jsonify({"response": bot_reply})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 if __name__ == '__main__':
     print("Starting Enterprise Sentiment Agent Web UI on port 5000...")
