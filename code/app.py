@@ -38,6 +38,16 @@ def rate_limit(f):
         return f(*args, **kwargs)
     return decorated_function
 
+# --- SECURITY LAYER: HTTP HEADERS ---
+@app.after_request
+def add_security_headers(response):
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    response.headers['X-Frame-Options'] = 'DENY'
+    response.headers['X-XSS-Protection'] = '1; mode=block'
+    # Restrict execution of malicious scripts while allowing necessary CDNs
+    response.headers['Content-Security-Policy'] = "default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com;"
+    return response
+
 @app.route('/')
 def index():
     return render_template('index.html')
