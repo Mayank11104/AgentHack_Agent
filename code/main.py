@@ -27,3 +27,14 @@ llm = ChatBedrock(
     model_id=model_id,
     model_kwargs=dict(temperature=0.1)
 )
+
+from pydantic import BaseModel, Field
+from typing import Literal
+
+# 3. Define the Strict Output Schema enforcing Chain of Contradiction (From Architecture Doc)
+class SentimentAnalysisResult(BaseModel):
+    pragmatic_analysis: str = Field(description="Analysis of fact vs opinion and implicit context.")
+    surface_sentiment: str = Field(description="The literal sentiment of the words.")
+    true_intention: str = Field(description="The actual intent of the speaker.")
+    contradiction_flag: bool = Field(description="True if surface sentiment contradicts true intention.")
+    final_classification: Literal["POSITIVE", "NEGATIVE", "NEUTRAL"] = Field(description="The final strict categorical classification.")
