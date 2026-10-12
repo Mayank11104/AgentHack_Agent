@@ -1,0 +1,9 @@
+pandas
+openpyxl
+python-dotenv
+boto3
+pydantic
+langchain
+langchain-aws
+langgraph
+flask
