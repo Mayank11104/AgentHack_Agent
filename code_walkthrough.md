@@ -139,99 +139,106 @@ class SentimentAnalysisResult(BaseModel):
 
 ---
 
-## Section 5: `preprocess_social_dataset()` Function
+## Section 5: `load_dataset()` — Cache-First Smart Loader
 
 ```python
-def preprocess_social_dataset(file_path: str) -> pd.DataFrame:
-    print("Pre-processing dataset using Claude 4.6 Sonnet structured outputs...")
+# File paths
+BASE_DIR   = os.path.dirname(os.path.abspath(__file__))
+DATA_FILE  = os.path.join(BASE_DIR, "..", "Synthetic Data - Social Media Tweets.xlsx")
+CACHE_FILE = os.path.join(BASE_DIR, "enriched_tweets.csv")
+
+def load_dataset() -> pd.DataFrame:
+    # ── FAST PATH: pre-computed cache exists ──
+    if os.path.exists(CACHE_FILE):
+        print("✅ Pre-computed cache found. Loading enriched_tweets.csv instantly...")
+        try:
+            df = pd.read_csv(CACHE_FILE)
+            print(f"   Loaded {len(df)} pre-enriched tweets from cache. Agent is ready.")
+            return df
+        except Exception as e:
+            print(f"⚠️  Cache read error ({e}). Falling back to live processing.")
+
+    # ── SLOW PATH: no cache — run live Nova Pro inference ──
+    print("⚙️  No cache found. Running live Amazon Nova Pro pre-processing...")
     try:
-        df = pd.read_excel(file_path)
+        df = pd.read_excel(DATA_FILE)
     except Exception as e:
-        print(f"Warning: Could not load excel file: {e}")
+        print(f"❌ Could not load Excel file: {e}")
         return pd.DataFrame(columns=["Tweet_ID", "Tweet_Text", "sentiment", "agent_reasoning"])
-```
 
-| Line | What It Does | Why We Need It |
-| :--- | :--- | :--- |
-| `def preprocess_social_dataset(file_path: str) -> pd.DataFrame:` | Defines a function that takes a file path and returns an enriched Pandas DataFrame. | Encapsulating the ingestion logic in a function keeps it reusable and testable. |
-| `try: df = pd.read_excel(file_path)` | Attempts to load the `.xlsx` file into a Pandas DataFrame. | Pandas automatically handles column naming and data type detection for Excel files. |
-| `except Exception as e:` | Catches any error during file loading (missing file, corrupted file, wrong path). | Prevents a startup crash if the dataset file is accidentally moved or renamed. |
-| `return pd.DataFrame(columns=[...])` | Returns an empty DataFrame with the correct column structure as a safe fallback. | The agent's tools can still operate without crashing even if the dataset fails to load. |
-
-```python
-    df['sentiment'] = 'NEUTRAL'
+    df['sentiment']       = 'NEUTRAL'
     df['agent_reasoning'] = ''
-    
-    system_instruction = """
-    You are an expert linguistic analyst. Classify text strictly as POSITIVE, NEGATIVE, or NEUTRAL.
-    Differentiate factual reporting (Neutral) from opinionated sentiment. 
-    Detect sarcasm by checking for contradictions between literal words and true intent.
-    """
-    
-    # Langchain natively supports Pydantic structured outputs with Bedrock Claude models!
+
+    system_instruction = """ ... enterprise-grade 60-line prompt ... """
+
     structured_llm = llm.with_structured_output(SentimentAnalysisResult)
-    
-    print(f"Found {len(df)} tweets. Processing the first 5 for demonstration...")
-    demo_df = df.head(5).copy()
-```
+    demo_df = df.head(20).copy()
 
-| Line | What It Does | Why We Need It |
-| :--- | :--- | :--- |
-| `df['sentiment'] = 'NEUTRAL'` | Adds a new column to the DataFrame and fills every row with `'NEUTRAL'` as a default. | Pre-allocating columns ensures the DataFrame has the right structure even if some rows fail to process later. |
-| `df['agent_reasoning'] = ''` | Adds a second column for the reasoning string and fills it with empty strings. | Same reason — safe default that prevents `KeyError` when accessing the column later. |
-| `system_instruction = """..."""` | Defines the multi-line instruction string passed to the AI as its role and rules. | This is prompt engineering — giving the AI a clear persona and task definition before showing it any tweet. |
-| `structured_llm = llm.with_structured_output(SentimentAnalysisResult)` | Creates a new version of the `ChatBedrock` model bound to our Pydantic schema. | When we call this, instead of returning a raw text response, it returns an instantiated `SentimentAnalysisResult` Python object with validated fields. |
-| `demo_df = df.head(5).copy()` | Takes only the first 5 rows of the full 100-row dataset into a new DataFrame copy. | Processing 100 tweets sequentially would take ~2 minutes on startup; 5 takes ~6 seconds, making live demos instant. `.copy()` prevents Pandas from editing the original DataFrame accidentally. |
-
-```python
     for index, row in demo_df.iterrows():
         tweet_text = row['Tweet_Text']
         try:
-            prompt = f"{system_instruction}\n\nAnalyze this text: {tweet_text}"
+            prompt          = f"{system_instruction}\n\nAnalyze this text: {tweet_text}"
             structured_data = structured_llm.invoke(prompt)
-            
             demo_df.at[index, 'sentiment'] = structured_data.final_classification
-            reasoning_string = (
+            demo_df.at[index, 'agent_reasoning'] = (
                 f"Pragmatic Context: {structured_data.pragmatic_analysis} | "
                 f"Sarcasm Check: {'Contradiction detected' if structured_data.contradiction_flag else 'No contradiction'} | "
                 f"Conclusion: {structured_data.true_intention}"
             )
-            demo_df.at[index, 'agent_reasoning'] = reasoning_string
-            print(f"Processed {row['Tweet_ID']}: {structured_data.final_classification}")
         except Exception as e:
-            print(f"Failed to process {row['Tweet_ID']}: {e}")
-            demo_df.at[index, 'sentiment'] = "NEUTRAL"
-            demo_df.at[index, 'agent_reasoning'] = "Error during processing."
-            
+            demo_df.at[index, 'sentiment']       = 'NEUTRAL'
+            demo_df.at[index, 'agent_reasoning'] = 'Error during processing.'
+
     return demo_df
+
+# 4. Load Dataset (cache-first strategy)
+GLOBAL_DATASET_DF = load_dataset()
 ```
+
+### File Path Constants
 
 | Line | What It Does | Why We Need It |
 | :--- | :--- | :--- |
-| `for index, row in demo_df.iterrows():` | Loops through every row in the 5-row sample DataFrame, giving us the row number (`index`) and the row data (`row`). | We need to call the AI separately for each tweet because a language model analyzes one text at a time. |
-| `tweet_text = row['Tweet_Text']` | Extracts the raw tweet string from the current row. | This is the actual customer post we are sending to Amazon Nova Pro for analysis. |
-| `prompt = f"{system_instruction}\n\nAnalyze this text: {tweet_text}"` | Builds the full text prompt by combining our instruction with the specific tweet. | The `\n\n` separates the system instructions from the actual data, making it easier for the model to parse. |
-| `structured_data = structured_llm.invoke(prompt)` | Sends the prompt to Bedrock, waits for the response, and returns it as a validated `SentimentAnalysisResult` Python object. | This single line handles the entire HTTP API call, response parsing, and Pydantic validation chain. |
-| `demo_df.at[index, 'sentiment'] = structured_data.final_classification` | Writes the validated classification label into the correct row and column of our DataFrame. | `.at[index, column]` is the fastest Pandas method for setting a single cell value by index position. |
-| `reasoning_string = (f"Pragmatic Context: ... | Sarcasm Check: ... | Conclusion: ...")` | Builds a human-readable explanation string by combining three fields from the Pydantic object. | This reasoning string is what the agent shows users when they ask "Why was TWT-001 classified as Negative?" |
-| `except Exception as e:` ... `demo_df.at[index, 'sentiment'] = "NEUTRAL"` | If the Bedrock API fails for any reason (timeout, rate limit, schema error), falls back to `NEUTRAL` and continues. | Defensive programming — one bad API response should not crash the whole startup. |
-| `return demo_df` | Returns the enriched 5-row DataFrame to the caller. | This DataFrame becomes `GLOBAL_DATASET_DF`, the in-memory knowledge base for both agent tools. |
+| `BASE_DIR = os.path.dirname(os.path.abspath(__file__))` | Gets the absolute folder path of `main.py` itself. | `__file__` can return relative paths on Windows. `abspath()` always guarantees a full path regardless of where Python was launched from. |
+| `DATA_FILE = os.path.join(BASE_DIR, "..", "Synthetic Data...")` | Navigates one level up from `code/` using `".."` to find the Excel file at the project root. | The dataset lives in the project root, not inside `code/`, so `..` goes up one directory. |
+| `CACHE_FILE = os.path.join(BASE_DIR, "enriched_tweets.csv")` | Points to `enriched_tweets.csv` in the same folder as `main.py` (inside `code/`). | Same-folder path — no `..` needed because the cache is stored inside `code/` alongside the script. |
+
+### Fast Path (Cache Exists — Demo Day)
+
+| Line | What It Does | Why We Need It |
+| :--- | :--- | :--- |
+| `if os.path.exists(CACHE_FILE):` | Checks whether `enriched_tweets.csv` exists on disk before doing anything else. | This is the decision gate — if the file is there, we skip all Nova Pro API calls entirely. |
+| `df = pd.read_csv(CACHE_FILE)` | Reads the pre-enriched CSV into a Pandas DataFrame in one shot. | CSV loading is pure disk I/O — no network, no AI calls. Completes in under 0.5 seconds for 100 rows. |
+| `return df` | Immediately returns the cached DataFrame and exits the function. | The function stops here on demo day. The slow path below never executes. |
+| `except Exception as e: print(f"⚠️ Cache read error...")` | If the CSV is corrupted or locked, catches the error and falls through to the slow path instead of crashing. | Defensive fallback — the agent still works even if the cache file is accidentally deleted or corrupted. |
+
+### Slow Path (No Cache — Live Processing)
+
+| Line | What It Does | Why We Need It |
+| :--- | :--- | :--- |
+| `df = pd.read_excel(DATA_FILE)` | Loads the original Excel file when no cache is present. | This is the fallback — runs on first-time setup or if someone deletes the cache. |
+| `df['sentiment'] = 'NEUTRAL'` | Pre-fills the sentiment column with a safe default for every row. | Ensures the DataFrame has the correct schema even if some rows fail to process later. |
+| `system_instruction = """...(60-line enterprise prompt)..."""` | The enterprise-grade prompt describing the AI's role, the 3-step Chain of Contradiction methodology, sarcasm rules, and quality standards. | A rich prompt produces significantly better sarcasm detection than a simple 3-line instruction. |
+| `structured_llm = llm.with_structured_output(SentimentAnalysisResult)` | Binds the Pydantic schema to the model so it returns a validated Python object instead of raw text. | Forces the AI to fill all 5 fields (pragmatic_analysis, surface_sentiment, true_intention, contradiction_flag, final_classification) before returning. |
+| `demo_df = df.head(20).copy()` | Takes only the first 20 rows as the live fallback. `.copy()` prevents editing the original DataFrame. | Processing 100 tweets live takes ~5 minutes; 20 takes ~1.5 minutes as an emergency fallback. |
+| `prompt = f"{system_instruction}\n\nAnalyze this text: {tweet_text}"` | Combines the instruction and the tweet text into one prompt string. | `\n\n` creates a clear visual separator between the instruction block and the data, making it easier for the model to parse. |
+| `structured_data = structured_llm.invoke(prompt)` | Sends the full prompt to Bedrock and waits for a validated `SentimentAnalysisResult` object back. | One line handles the full HTTP call → response parse → Pydantic validation chain. |
+| `demo_df.at[index, 'agent_reasoning'] = (f"Pragmatic Context: ... | Sarcasm Check: ... | Conclusion: ...")` | Builds a human-readable reasoning string from 3 Pydantic fields and writes it to the DataFrame. | This is the pre-computed reasoning the agent surfaces when a user asks "Why was TWT-001 classified as Negative?" |
+| `except: demo_df.at[index, 'sentiment'] = 'NEUTRAL'` | Falls back to NEUTRAL for any tweet that fails API processing. | Defensive programming — one failed API call should not crash the entire startup loop. |
+| `return demo_df` | Returns the enriched DataFrame. | Becomes `GLOBAL_DATASET_DF` — the in-memory knowledge base both tools read from. |
 
 ---
 
-## Section 6: Running Pre-processing at Startup
+## Section 6: Running the Loader at Startup
 
 ```python
-# 4. Run Pre-processing Phase
-DATA_FILE = os.path.join(os.path.dirname(__file__), "..", "Synthetic Data - Social Media Tweets.xlsx")
-GLOBAL_DATASET_DF = preprocess_social_dataset(DATA_FILE)
+# 4. Load Dataset (cache-first strategy)
+GLOBAL_DATASET_DF = load_dataset()
 ```
 
 | Line | What It Does | Why We Need It |
 | :--- | :--- | :--- |
-| `os.path.dirname(__file__)` | Returns the absolute directory path of the currently running Python file (`main.py`'s folder). | Anchors the file path to the script's location so it works correctly regardless of where the user launches Python from. |
-| `os.path.join(..., "..", "Synthetic Data - ...")` | Navigates one level up from `code/` (using `".."`) and then into the dataset filename. | The Excel file lives at the project root, not inside `code/`, so we need to go up one directory. |
-| `GLOBAL_DATASET_DF = preprocess_social_dataset(DATA_FILE)` | Calls the preprocessing function immediately when the Python module is loaded and stores the result as a module-level variable. | Capital letters signal that this is a **module-level global** — it is available to both tool functions without passing it as an argument. |
+| `GLOBAL_DATASET_DF = load_dataset()` | Calls the loader immediately when `main.py` is imported and stores the result as a module-level variable. | Capital letters = module-level global, available to both tool functions without being passed as an argument. On demo day this takes < 0.5s. On first boot without cache, it runs the slow path. |
 
 ---
 
@@ -272,19 +279,30 @@ def calculate_overall_sentiment_distribution() -> dict:
 
 ---
 
-## Section 8: Tool 2 — `query_specific_tweet()`
+## Section 8: Tool 2 — `query_specific_tweet()` (Updated)
 
 ```python
 @tool
 def query_specific_tweet(tweet_id: str) -> dict:
     """
     Retrieves the specific classification and the pre-computed logical reasoning for a single tweet ID.
+    Valid Tweet IDs are TWT-001 through TWT-100.
     """
+    # Validate format before searching
+    valid_ids = GLOBAL_DATASET_DF['Tweet_ID'].tolist()
+
+    if tweet_id not in valid_ids:
+        return {
+            "not_found": True,
+            "requested_id": tweet_id,
+            "message": (
+                f"Tweet ID '{tweet_id}' does not exist in the dataset. "
+                f"Valid Tweet IDs range from TWT-001 to TWT-{len(valid_ids):03d}. "
+                f"Please verify the ID and try again."
+            )
+        }
+
     tweet_row = GLOBAL_DATASET_DF[GLOBAL_DATASET_DF['Tweet_ID'] == tweet_id]
-    
-    if tweet_row.empty:
-        return {"error": f"Tweet ID {tweet_id} could not be located in the dataset."}
-        
     return {
         "tweet_text": tweet_row.iloc[0]['Tweet_Text'],
         "classification": tweet_row.iloc[0]['sentiment'],
@@ -294,40 +312,62 @@ def query_specific_tweet(tweet_id: str) -> dict:
 
 | Line | What It Does | Why We Need It |
 | :--- | :--- | :--- |
-| `def query_specific_tweet(tweet_id: str) -> dict:` | Defines a function with one argument, the tweet ID string, returning a dictionary. | The `tweet_id: str` type annotation is read by `@tool` to generate the JSON schema property `"tweet_id": {"type": "string"}`. |
-| `GLOBAL_DATASET_DF[GLOBAL_DATASET_DF['Tweet_ID'] == tweet_id]` | Filters the DataFrame to rows where the `Tweet_ID` column exactly matches the requested ID string. | This is a standard Pandas boolean mask filter — it returns a smaller DataFrame containing only the matching row(s). |
-| `if tweet_row.empty:` | Checks if the filtered result is empty (no matching rows found). | A non-existent ID like `TWT-999` would return an empty DataFrame; we handle this gracefully instead of throwing an `IndexError`. |
-| `return {"error": f"Tweet ID {tweet_id} could not be located..."}` | Returns a structured error dictionary the agent can relay to the user. | The agent reads this as tool output and responds naturally: "That tweet ID was not found in our dataset." |
-| `tweet_row.iloc[0]['Tweet_Text']` | Accesses the first matching row (index 0) by position and retrieves the `Tweet_Text` column value. | `.iloc[0]` converts the DataFrame row to a Series so we can access individual column values by name. |
-| `tweet_row.iloc[0]['agent_reasoning']` | Retrieves the pre-computed reasoning string that was built during the startup preprocessing phase. | This is the Chain of Contradiction explanation that gives users a detailed linguistic analysis of why the tweet was classified a certain way. |
+| `def query_specific_tweet(tweet_id: str) -> dict:` | Defines a function with one string argument and a dict return type. | The `tweet_id: str` annotation is read by `@tool` to auto-generate the JSON schema `"tweet_id": {"type": "string"}`. |
+| **Updated docstring** `"Valid Tweet IDs are TWT-001 through TWT-100"` | Tells the AI what the valid ID range is right inside the tool description. | The agent reads this docstring — knowing the valid range helps it inform the user properly when an out-of-range ID is given. |
+| `valid_ids = GLOBAL_DATASET_DF['Tweet_ID'].tolist()` | Extracts all actual tweet IDs from the loaded dataset into a Python list. | Building the valid list dynamically means it always reflects the real data — no hardcoded count that could go stale. |
+| `if tweet_id not in valid_ids:` | Checks whether the requested ID exists in the dataset **before** doing any DataFrame filtering. | Faster and more explicit than filtering and checking `.empty` — also lets us return a richer error message. |
+| `return {"not_found": True, "requested_id": tweet_id, "message": ...}` | Returns a structured dictionary with a clear, human-readable error message including the valid range. | The agent reads this dict and relays the message. The `not_found: True` key also distinguishes this from an "Out of Scope" error, preventing mislabeling. |
+| `f"Valid Tweet IDs range from TWT-001 to TWT-{len(valid_ids):03d}"` | Dynamically formats the upper bound with zero-padding (e.g., `TWT-100`). | `{len(valid_ids):03d}` pads the number to 3 digits, matching the TWT-XXX format consistently. |
+| `tweet_row = GLOBAL_DATASET_DF[GLOBAL_DATASET_DF['Tweet_ID'] == tweet_id]` | Boolean mask filter — returns a sub-DataFrame containing only the matching row. | Only runs if the ID was found in `valid_ids`, so it is guaranteed to return a non-empty result. |
+| `tweet_row.iloc[0]['agent_reasoning']` | Retrieves the pre-computed Chain of Contradiction reasoning string from the cache. | This is what makes the "Why was TWT-004 negative?" answer detailed and defensible — the reasoning was computed at batch time, not at query time. |
 
 ---
 
-## Section 9: System Prompt
+## Section 9: System Prompt (Updated)
 
 ```python
-# 6. Construct the Agent
 system_prompt = """
 # CORE IDENTITY & PERSONA
 You are Evonence AI, an elite Enterprise Social Media Intelligence Analyst...
 
 # COGNITIVE PROCESSING & REASONING
-When analyzing tweets, you must look beyond the surface...
+1. Pragmatic Context: Understand the real-world implications.
+2. Sarcasm & Contradictions: Identify when literal words contradict true intention.
+
+# TWEET ID RESOLUTION — CRITICAL
+- "10th tweet" / "tweet 10" → TWT-010
+- "first tweet" → TWT-001
+- "tweet number 25" → TWT-025
+- Any number N → TWT-{N:03d} (zero-padded)
+ALWAYS resolve ordinals to a Tweet ID and call query_specific_tweet.
 
 # STRICT ARCHITECTURAL CONSTRAINTS
-- NO HALLUCINATIONS: You are strictly forbidden from calculating percentages...
-- DETERMINISTIC TOOLS: If asked for overall distribution or percentages, you MUST use the `calculate_overall_sentiment_distribution` tool.
-- SPECIFIC INQUIRIES: If asked about a specific tweet ID (e.g., TWT-001), you MUST use the `query_specific_tweet` tool.
+- NO HALLUCINATIONS: Forbidden from calculating percentages yourself.
+- DETERMINISTIC TOOLS: Distribution questions → use calculate_overall_sentiment_distribution.
+- SPECIFIC INQUIRIES: Tweet by ID or ordinal → resolve → use query_specific_tweet.
+
+# SCOPE BOUNDARY — PRECISE DEFINITION
+IN SCOPE: tweet sentiment, classification, dataset stats, methodology, how the agent works.
+OUT OF SCOPE: cooking, sports, coding help, math, creative writing, personal advice, jokes.
+
+IMPORTANT — NOT FOUND ≠ OUT OF SCOPE:
+If TWT-999 or 200th tweet is requested → call the tool → relay the not_found message.
+Do NOT label this as Out of Scope.
 
 # OUTPUT AESTHETICS & FORMATTING
-- Narrative Flow: Write fluid, conversational paragraphs...
-- Zero Robotic Footers: NEVER end your response with generic chatbot phrases...
-- Zero Tool Exposure: Never mention that you are using tools...
+- Narrative Flow, Professional Markdown, Zero Robotic Footers, Zero Tool Exposure.
 """
 ```
 
 | Block | What It Does | Why We Need It |
 | :--- | :--- | :--- |
+| `# CORE IDENTITY & PERSONA` | Sets the AI's role as a professional executive analyst. | Prevents robotic, informal, or generic responses. The AI adopts this persona for every answer. |
+| `# COGNITIVE PROCESSING & REASONING` | Instructs the AI to detect sarcasm and understand pragmatic context. | Without this, the AI might give surface-level keyword-based answers instead of deep analysis. |
+| `# TWEET ID RESOLUTION — CRITICAL` *(new)* | Maps natural language like "10th tweet" or "first tweet" to the correct `TWT-XXX` format. | Without this, the agent misinterprets ordinal queries as out-of-scope — the bug where "10th tweet" triggered the Out of Scope message. The agent now correctly resolves and calls `query_specific_tweet("TWT-010")`. |
+| `# STRICT ARCHITECTURAL CONSTRAINTS` | Forbids the AI from doing math itself. Forces tool calls for both distribution and specific tweet queries. | Core anti-hallucination guardrail — the agent always calls Python tools for data instead of guessing from memory. |
+| `# SCOPE BOUNDARY` *(updated)* | Explicit IN SCOPE list + explicit OUT OF SCOPE list — replaced the old vague `"anything outside scope → decline"`. | The old version was too aggressive and misfired on valid informal queries. The explicit lists give the agent precise guidance. |
+| `# NOT FOUND ≠ OUT OF SCOPE` *(new)* | Clarifies that asking for TWT-999 or tweet 200 is a valid query — the agent should call the tool and relay the not_found message, not return Out of Scope. | Fixes the mislabeling bug where out-of-range tweet IDs were incorrectly declined as off-topic. |
+| `# OUTPUT AESTHETICS` | Bans robotic footers, bans mentioning tools, enforces narrative flow. | Makes the agent feel like a real executive analyst rather than a generic chatbot. |
 | `# CORE IDENTITY & PERSONA` | Sets the AI's role as a professional analyst presenting to executives. | Prevents robotic or informal responses — the AI adopts this persona for every single answer. |
 | `# COGNITIVE PROCESSING & REASONING` | Instructs the AI to detect sarcasm and pragmatic context beyond literal words. | Without this, the AI might give surface-level keyword-based answers. |
 | `NO HALLUCINATIONS` constraint | Explicitly forbids the AI from performing mental arithmetic. | This is the most critical safety constraint — without it, the AI might guess percentages rather than calling the tool. |

@@ -17,7 +17,7 @@ This comprehensive technical guide is reconstructed directly from your source co
 | **7. Agent vs. Basic Chatbot** | Unlike a standard LLM wrapper that ingests an entire dataset into its prompt and attempts mental arithmetic, this system is an **autonomous LangGraph ReAct agent** (`create_react_agent`). The LLM independently inspects the prompt, identifies intent, selects the correct Python tool, extracts execution parameters, receives structured tool output, and synthesizes an executive summary without exposing raw mechanics. |
 | **8. Implementation Status** | **Functional Hackathon Prototype with Enterprise Guardrails**. Core agent, tools, web API, security layer, and frontend UI are implemented and executable. |
 | **9. Demonstrable Capabilities** | • Server launch on port `5000`.<br>• Startup pre-processing of synthetic tweets with structured outputs.<br>• Interactive web chat answering single-tweet pragmatic sentiment queries.<br>• Exact macro-level percentage reporting via the Pandas tool.<br>• Active DoS rejection (HTTP 429 after 5 requests/min) and payload truncation (HTTP 413 above 500 chars). |
-| **10. Limitations & Hackathon Cutoffs** | • Startup pre-processing is bounded to `df.head(5)` to prevent startup latency during live judging.<br>• Dataset is stored in an in-memory Pandas DataFrame rather than an external database.<br>• Conversational memory in [app.py](code/app.py) is single-turn per API call. |
+| **10. Limitations & Hackathon Cutoffs** | • ~~Startup pre-processing bounded to `df.head(5)`~~ → **Resolved**: All 100 tweets pre-computed offline via `batch_enrich_dataset.py` and cached in `enriched_tweets.csv`. Startup now loads from cache in < 0.5 seconds.<br>• Dataset is stored in an in-memory Pandas DataFrame rather than an external database.<br>• Conversational memory in [app.py](code/app.py) is single-turn per API call. |
 
 ---
 
@@ -117,18 +117,25 @@ flowchart TD
 
 ## 4. End-to-End Execution Flow
 
-### Phase A: Application Initialization (Cold Start)
+### Phase A: Application Initialization (Cold Start — Post-Enhancement)
 1. **Entry Point Execution:** Running `python app.py` imports `agent_executor` from [main.py](code/main.py).
-2. **Credential & Client Setup:** [main.py:L12-L25](code/main.py#L12-L25) invokes `load_dotenv()`, verifies `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`, and instantiates `boto3.client('bedrock-runtime', region_name='us-east-1')`.
+2. **Credential & Client Setup:** [main.py](code/main.py) invokes `load_dotenv()`, verifies `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`, and instantiates `boto3.client('bedrock-runtime', region_name='us-east-1')`.
 3. **Model Binding:** LangChain's `ChatBedrock` wraps the client targeting `amazon.nova-pro-v1:0` with `temperature=0.1`.
-4. **Data Ingestion & Pre-processing:**
-   - [main.py:L90](code/main.py#L90) triggers `preprocess_social_dataset()`.
-   - Pandas reads `Synthetic Data - Social Media Tweets.xlsx` (100 total rows).
-   - [main.py:L62](code/main.py#L62) binds `llm.with_structured_output(SentimentAnalysisResult)`.
-   - For demo efficiency, it iterates through the first 5 records (`df.head(5)`), calls the LLM, populates `sentiment` (`POSITIVE`, `NEGATIVE`, or `NEUTRAL`), and builds an `agent_reasoning` string containing pragmatic context, sarcasm check, and true intent.
+4. **Data Loading — Cache-First Strategy:**
+   - `load_dataset()` first checks if `code/enriched_tweets.csv` exists.
+   - **FAST PATH (Demo Day):** If cache exists → `pd.read_csv()` loads all 100 pre-enriched tweets instantly (< 0.5 seconds). Server is ready immediately.
+   - **SLOW PATH (Fallback):** If no cache → runs live Amazon Nova Pro inference on first 20 tweets (`df.head(20)`) using the enterprise-grade `system_instruction` prompt.
    - The result is stored in `GLOBAL_DATASET_DF`.
-5. **Agent Assembly:** [main.py:L152-L155](code/main.py#L152-L155) instantiates `create_react_agent(model=llm, tools=[calculate_overall_sentiment_distribution, query_specific_tweet])`.
-6. **Web Server Ready:** [app.py:L78](code/app.py#L78) starts Flask listening on `http://127.0.0.1:5000`.
+5. **Agent Assembly:** `create_react_agent(model=llm, tools=[calculate_overall_sentiment_distribution, query_specific_tweet])` compiles the LangGraph ReAct graph.
+6. **Web Server Ready:** Flask listens on `http://127.0.0.1:5000`.
+
+**How to pre-generate the cache (run once before demo):**
+```bash
+cd code
+python batch_enrich_dataset.py
+# Processes all 100 tweets → saves code/enriched_tweets.csv
+# Takes ~5-10 minutes offline. Demo startup is then instant.
+```
 
 ---
 
@@ -183,24 +190,25 @@ flowchart TD
 ## 5. File-by-File Explanation
 
 ### [code/main.py](code/main.py) (The Core Agent Engine)
-- **Role:** Implements the LLM client, data preprocessing pipeline, Pydantic schemas, deterministic tools, and LangGraph agent definition.
+- **Role:** Implements the LLM client, data loading pipeline (cache-first), Pydantic schemas, deterministic tools, and LangGraph agent definition.
 - **Key Code Sections:**
-  - **Lines 11–25:** Credential loading (`load_dotenv`) and `boto3.client('bedrock-runtime', region_name='us-east-1')`. Validates that AWS credentials exist before attempting client initialization.
-  - **Lines 27–34:** `ChatBedrock` instantiation using `model_id='amazon.nova-pro-v1:0'` with `temperature=0.1` (low temperature minimizes hallucinations and stabilizes structured output).
-  - **Lines 36–43:** `SentimentAnalysisResult(BaseModel)`: Pydantic schema implementing the *Chain of Contradiction* with fields `pragmatic_analysis`, `surface_sentiment`, `true_intention`, `contradiction_flag`, and `final_classification`.
-  - **Lines 44–86:** `preprocess_social_dataset()`: Ingests the Excel file, binds the Pydantic schema via `llm.with_structured_output()`, processes rows, and generates enriched reasoning strings.
-  - **Lines 93–110:** `calculate_overall_sentiment_distribution()`: Decorated with `@tool`. Uses Pandas `value_counts(normalize=True) * 100` to guarantee deterministic calculation.
-  - **Lines 112–126:** `query_specific_tweet(tweet_id: str)`: Decorated with `@tool`. Performs exact string filtering on the DataFrame to return pre-computed reasoning.
-  - **Lines 129–150:** `system_prompt`: Enforces the "Evonence AI" enterprise persona, forbids self-calculation of math, and forbids robotic footer cliches.
-  - **Lines 152–155:** `create_react_agent(model=llm, tools=[...])`: Prebuilt LangGraph ReAct runner.
+  - **Credentials block:** `load_dotenv()` + `boto3.client('bedrock-runtime', region_name='us-east-1')`. Fail-fast `ValueError` if credentials missing.
+  - **`ChatBedrock` setup:** `model_id='amazon.nova-pro-v1:0'`, `temperature=0.1`.
+  - **`SentimentAnalysisResult(BaseModel)`:** Pydantic schema with fields `pragmatic_analysis`, `surface_sentiment`, `true_intention`, `contradiction_flag`, `final_classification`. Implements *Chain of Contradiction*.
+  - **`load_dataset()`:** Cache-first loader. Checks for `enriched_tweets.csv` → instant CSV load. Falls back to live Nova Pro inference on `df.head(20)` if no cache found.
+  - **`system_instruction` (enterprise-grade prompt):** 5-section prompt covering Role & Expertise, Chain of Contradiction 3-step methodology, Sarcasm Detection Rules, Factual vs. Opinion rules, Implicit Negation & Emoji handling, and Quality Standards.
+  - **`calculate_overall_sentiment_distribution()` `@tool`:** Pandas `value_counts(normalize=True) * 100` — deterministic math, zero hallucination.
+  - **`query_specific_tweet(tweet_id)` `@tool`:** Validates against `valid_ids` list first; returns a clean `not_found` dict with range hint (`TWT-001 to TWT-{N}`) if ID doesn't exist.
+  - **`system_prompt`:** Enforces Evonence AI persona, Tweet ID ordinal resolution (`"10th tweet" → TWT-010`), precise IN/OUT scope boundary, and `NOT FOUND vs Out-of-Scope` distinction.
+  - **`create_react_agent(model=llm, tools=[...])`:** Prebuilt LangGraph ReAct runner.
 
 ### [code/app.py](code/app.py) (Web Server & Security Layer)
 - **Role:** Lightweight WSGI server exposing the agent to the web frontend while enforcing enterprise security policies.
 - **Key Code Sections:**
-  - **Lines 8–14:** Dynamic base path resolution using `BASE_DIR = os.path.dirname(os.path.abspath(__file__))` to prevent template resolution failures across Windows working directories.
-  - **Lines 17–40:** `@rate_limit` decorator: In-memory sliding window algorithm tracking client IP timestamps. Rejects excess calls (>5 in 60s) with HTTP 429.
-  - **Lines 43–50:** `@app.after_request`: Injects `nosniff`, `DENY` for clickjacking protection, and a restrictive `Content-Security-Policy`.
-  - **Lines 56–74:** `chat()` route: Enforces empty-input checks and maximum payload length (500 chars, HTTP 413) before invoking `agent_executor.invoke()`.
+  - **Base path resolution:** `BASE_DIR = os.path.dirname(os.path.abspath(__file__))` — prevents template failures across Windows working directories.
+  - **`@rate_limit` decorator:** In-memory sliding window (5 requests / 60 seconds / IP). HTTP 429 on breach.
+  - **`@app.after_request`:** Injects `nosniff`, `X-Frame-Options: DENY`, `X-XSS-Protection`, and restrictive `Content-Security-Policy`.
+  - **`chat()` route:** Empty-input check (HTTP 400), 500-character ceiling (HTTP 413). Hardened `bot_reply` extraction handles both plain string and list-of-blocks content formats returned by Nova Pro — prevents the `"Network error"` browser bug.
 
 ### [code/templates/index.html](code/templates/index.html) (Frontend Structure)
 - **Role:** Executive chat UI interface.
@@ -221,9 +229,11 @@ flowchart TD
 - **Key Design:** Dark theme palette (`#212121`, `#2f2f2f`), glassmorphism header panels, responsive 1200px container width, and smooth micro-animations.
 
 ### Workspace Root Files
-- `Synthetic Data - Social Media Tweets.xlsx`: The raw dataset containing 100 rows with columns `Tweet_ID` and `Tweet_Text`.
-- `Use_Case_Details.docx`: The original hackathon challenge brief detailing requirements for sentiment classification, explanation, sarcasm handling, and overall summaries.
-- `LLM Sentiment Agent Architecture.md`: The comprehensive architectural blueprint outlining the decoupled design pattern and academic literature.
+- `Synthetic Data - Social Media Tweets.xlsx`: Raw dataset — 100 rows with `Tweet_ID` and `Tweet_Text`.
+- `code/enriched_tweets.csv`: **Pre-computed cache** — all 100 tweets enriched with `sentiment` and `agent_reasoning` by `batch_enrich_dataset.py`. Loaded on startup for instant < 0.5s boot.
+- `code/batch_enrich_dataset.py`: One-time offline script — processes all 100 tweets with Nova Pro and saves to `enriched_tweets.csv`.
+- `Use_Case_Details.docx`: Original hackathon challenge brief.
+- `LLM Sentiment Agent Architecture.md`: Architectural blueprint outlining the decoupled design and academic literature (updated to reflect AWS Bedrock / LangGraph implementation).
 
 ---
 
@@ -376,10 +386,10 @@ RAG is optimal for unbounded textual document search using cosine similarity ove
 
 #### Q9: "What happens if a user submits a tweet ID that does not exist in the dataset?"
 - **Model Answer:**  
-  "The `query_specific_tweet` tool handles this gracefully. It performs a DataFrame lookup; if the resulting slice is empty, it returns an explicit error dictionary: `{'error': 'Tweet ID X could not be located in the dataset.'}`. The agent receives this observation and informs the user clearly without crashing."
+  "The `query_specific_tweet` tool first validates the requested ID against the full list of valid IDs in `GLOBAL_DATASET_DF`. If not found, it returns a structured `not_found` dictionary with an explicit message: `'Tweet ID TWT-999 does not exist. Valid Tweet IDs range from TWT-001 to TWT-100.'` The agent relays this message cleanly — no 'Out of Scope' mislabeling, no crash."
 - **Deep Explanation:**  
-  We avoid raw exceptions by handling missing keys inside the tool. This allows the ReAct agent to synthesize a helpful response such as *'I checked our records, but Tweet ID TWT-999 is not present in the current dataset.'*
-- **Code Evidence:** [main.py:L117-L121](code/main.py#L117-L121).
+  We distinguish between two different error types: **Out of Scope** (unrelated topic like cooking or math) vs **Not Found** (valid dataset question with an invalid ID). Conflating them would confuse users. The tool-level fix guarantees consistent messaging regardless of how the agent phrases its response.
+- **Code Evidence:** `query_specific_tweet()` `not_found` block in [main.py](code/main.py).
 
 #### Q10: "Your architecture document talks about Google ADK and Gemini, but your code uses AWS Bedrock and LangGraph. Why?"
 - **Model Answer:**  
@@ -475,6 +485,53 @@ RAG is optimal for unbounded textual document search using cosine similarity ove
    A: "Replace in-memory DataFrame with PostgreSQL/BigQuery, run preprocessing asynchronously via 
        Bedrock Batch, replace in-memory rate limiting with Redis, and use IAM instance roles."
 ========================================================================================
+```
+
+---
+
+## 13. Post-Hackathon Improvements Log
+
+After the hackathon submission, the following production-quality improvements were implemented to maximize demo reliability and response quality:
+
+| # | Improvement | Files Changed | Impact |
+| :--- | :--- | :--- | :--- |
+| 1 | **Batch Pre-computation Cache** | `batch_enrich_dataset.py` (new), `main.py` | All 100 tweets pre-processed offline with Nova Pro. Startup time reduced from ~60s to < 0.5s via `enriched_tweets.csv` cache. |
+| 2 | **Cache-First `load_dataset()`** | `main.py` | Replaces `preprocess_social_dataset()`. Checks for CSV cache first (fast path), falls back to live inference (slow path). |
+| 3 | **Enterprise-Grade `system_instruction` Prompt** | `main.py`, `batch_enrich_dataset.py` | Replaced 3-line shallow prompt with a 60-line expert prompt covering Dr. Evonence persona, 3-step Chain of Contradiction methodology, sarcasm rules, factual vs. opinion rules, emoji/punctuation signals, and quality standards. |
+| 4 | **Ordinal Tweet Resolution** | `main.py` (system_prompt) | Agent now resolves `"10th tweet"`, `"first tweet"`, `"tweet number 25"` to correct TWT-format IDs before tool calls. |
+| 5 | **Smart Scope Boundary** | `main.py` (system_prompt) | Replaced blunt `"anything outside scope → decline"` with explicit IN SCOPE / OUT OF SCOPE lists. Informal dataset queries no longer trigger the out-of-scope message. |
+| 6 | **Not-Found vs Out-of-Scope Distinction** | `main.py` (tool + system_prompt) | `query_specific_tweet` now returns a `not_found` dict with range hint. System prompt clarifies this is different from out-of-scope. TWT-999 returns `"Tweet ID doesn't exist, valid range TWT-001 to TWT-100"`. |
+| 7 | **Hardened `bot_reply` Extraction** | `app.py` | Nova Pro sometimes returns `content` as a list of blocks. Fixed `"Network error"` browser bug by safely extracting text from any content format. |
+| 8 | **Corrected Print Statement** | `main.py` | Changed `"Claude 4.6 Sonnet"` to `"Amazon Nova Pro"` in startup log. |
+| 9 | **CSV relocated to `code/`** | `main.py`, `batch_enrich_dataset.py` | `enriched_tweets.csv` moved into `code/` folder for cleaner project structure. Path constants updated in both files. |
+
+### Demo Day Checklist
+```bash
+# 1. Pre-compute cache (done once tonight)
+cd d:\Evonence_ADK\code
+python batch_enrich_dataset.py   # 100/100 tweets processed ✅
+
+# 2. Launch agent on demo day
+python app.py
+# Console shows: ✅ Pre-computed cache found. Loaded 100 tweets instantly.
+
+# 3. Open browser
+# http://127.0.0.1:5000
+```
+
+### 10 Judge Queries & Expected Behavior
+| Query | Expected Response |
+| :--- | :--- |
+| `What is the overall sentiment distribution?` | Tool called → exact % (31 Positive / 39 Negative / 30 Neutral) + business insight |
+| `Tell me the sentiment of TWT-001` | Tool called → NEGATIVE + Chain of Contradiction reasoning |
+| `What is the sentiment of the 10th tweet?` | Resolved to TWT-010 → POSITIVE |
+| `Why was TWT-004 classified as Negative?` | Sarcasm + Peace Prize contradiction explained |
+| `Which tweets show sarcasm? How do you detect it?` | Named tweets + methodology explained |
+| `What % are positive and how does that reflect brand health?` | Tool call + executive business narrative |
+| `What is 15 + 27?` | **Out of Scope** message returned |
+| `What is the sentiment of TWT-999?` | **Tweet Not Found** — valid range TWT-001 to TWT-100 |
+| `What is the sentiment of the 200th tweet?` | Resolves TWT-200 → **Tweet Not Found** |
+| `What is tweet 5's sentiment and the overall distribution?` | Both tools called — compound query handled |
 ```
 
 ---

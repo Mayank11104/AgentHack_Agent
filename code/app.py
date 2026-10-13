@@ -68,10 +68,28 @@ def chat():
         
     try:
         response = agent_executor.invoke({"messages": [("system", system_prompt), ("user", user_input)]})
-        bot_reply = response['messages'][-1].content
+
+        # Safely extract the final message content — always guarantee a plain string
+        last_message = response['messages'][-1]
+        if hasattr(last_message, 'content'):
+            bot_reply = last_message.content
+            if isinstance(bot_reply, list):
+                # Some models return content as a list of blocks — extract text parts
+                bot_reply = " ".join(
+                    block.get("text", "") if isinstance(block, dict) else str(block)
+                    for block in bot_reply
+                ).strip()
+        else:
+            bot_reply = str(last_message)
+
+        if not bot_reply:
+            bot_reply = "I was unable to generate a response. Please try again."
+
         return jsonify({"response": bot_reply})
+
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        print(f"AGENT ERROR: {e}")
+        return jsonify({"error": "The intelligence engine encountered an unexpected error. Please try rephrasing your query."}), 500
 
 if __name__ == '__main__':
     print("Starting Enterprise Sentiment Agent Web UI on port 5000...")
